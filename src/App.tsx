@@ -4,74 +4,83 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
-import { Wrench, Truck, ClipboardList } from "lucide-react";
-import FormsSectionComponent from "@/components/FormsSection";
-import SettingsHolidays from "@/modules/SettingsHolidays";
-import { addWorkingDaysFrom } from "@/lib/workdays";
-import { download, typeLabel, sortAssets, sortService, validateWO } from "@/lib/utils";
+import { downloadCSV, sortAssets } from "@/lib/utils";
+import AssetCard from "@/components/AssetCard";
+import KPI from "@/components/KPI";
+import { loadAssets, setStatus, type Asset } from "@/lib/storage";
+import {
+  availabilityLabel,
+  getNextReservation,
+  hasCurrentOrFutureReservation,
+  hasFutureReservationWithin,
+  isFree,
+} from "@/lib/assetSelectors";
 
-const assetsSeed = [
-  { code: "DGU-089", serialNumber: "SN-089-P800", brand: "FG Wilson", model: "P800", kva: 800, status: "rented", engine: "Perkins", alternator: "Leroy Somer", controller: "DSE 8610", hours: 5400, site: "СПб, объект-7", customer: "ООО ЭнергоСервис", lastService: "2025-09-12" },
-  { code: "DGU-036", serialNumber: "SN-036-A1250", brand: "AKSA", model: "A1250", kva: 1250, status: "ready", engine: "Cummins", alternator: "Stamford", controller: "DSE 8610", hours: 210, site: "Склад СПб", lastService: "2025-10-10" },
-  { code: "DGU-121", serialNumber: "SN-121-V1500", brand: "VibroPower", model: "V1500", kva: 1500, status: "maintenance", engine: "Doosan", alternator: "Leroy Somer", controller: "DSE 8610", hours: 7200, site: "Москва, ЦОД", eta: "2025-11-05", lastService: "2025-08-01" },
-  { code: "DGU-150", serialNumber: "SN-150-V40", brand: "VibroPower", model: "V40", kva: 40, status: "ready", engine: "Perkins", alternator: "Stamford", controller: "DSE 8610", hours: 120, site: "Склад СПб", lastService: "2025-10-01" },
-  { code: "DGU-001", serialNumber: "SN-001-P500", brand: "FG Wilson", model: "P500", kva: 500, status: "rented", engine: "Perkins", alternator: "Stamford", controller: "DSE 8610", hours: 3100, site: "Тюмень", customer: "ООО СтройИнж", lastService: "2025-07-20" },
+// — Seed (минимальный; всё прочее приходит из storage.ts миграцией)
+const assetsSeed: Asset[] = [
+  { code: "DGU-001", brand: "FG Wilson",  model: "P500",  kva: 500,  status: "rented",      site: "Тюмень",       serialNumber: "SN-001-P500", customer: "ООО СтройИнж",   contract: "Д-452/25" },
+  { code: "DGU-036", brand: "AKSA",       model: "A1250", kva: 1250, status: "ready",       site: "Склад СПб",   serialNumber: "SN-036-A1250" },
+  { code: "DGU-121", brand: "VibroPower", model: "V1500", kva: 1500, status: "maintenance", site: "Москва, ЦОД", serialNumber: "SN-121-V1500" },
 ];
-const serviceSeed = [
-  { id: "WO-1001", type: "PM", status: "open", priority: 2, assetCode: "DGU-121", eta: "2025-11-05", start: "2025-10-21", end: "", desc: "ТО-7500 м/ч, фильтры, масло" },
-  { id: "WO-1002", type: "CM", status: "waiting_parts", priority: 1, assetCode: "DGU-089", eta: "2025-10-29", start: "2025-10-20", end: "", desc: "Замена ТНВД, ожидание ЗИП" },
-  { id: "WO-1003", type: "PM", status: "in_progress", priority: 3, assetCode: "DGU-001", eta: "2025-10-26", start: "2025-10-22", end: "", desc: "ТО-3000 м/ч" },
-  { id: "WO-1004", type: "CM", status: "completed", priority: 2, assetCode: "DGU-036", eta: "2025-10-18", start: "2025-10-15", end: "2025-10-18", desc: "Замена датчика давления масла" },
-];
 
-function KPI({ label, value, onClick }:{ label:string; value:number|string; onClick?: ()=>void }){
-  return (
-    <Card onClick={onClick} className="rounded-2xl cursor-pointer hover:shadow-md transition">
-      <CardHeader className="pb-2"><CardTitle className="text-sm text-muted-foreground">{label}</CardTitle></CardHeader>
-      <CardContent className="text-3xl font-semibold">{value}</CardContent>
-    </Card>
-  );
-}
+type ReservFilter = "all" | "has" | "free" | "soon7";
 
-export default function App(){
-  const [activeTab, setActiveTab] = useState("assets");
-  const [assetSort, setAssetSort] = useState<{key: string; dir: 'asc'|'desc'}>({ key: 'status', dir: 'asc' });
-  const [serviceSort, setServiceSort] = useState<{key: string; dir: 'asc'|'desc'}>({ key: 'eta', dir: 'asc' });
+export default function App() {
+  const [activeTab, setActiveTab] = useState<"assets" | "service">("assets");
+  const [assets, setAssets] = useState<Asset[]>(() => {
+    const loaded = loadAssets(assetsSeed);
+    return Array.isArray(loaded) ? loaded : assetsSeed;
+  });
+  const assetsSafe: Asset[] = Array.isArray(assets) ? assets : [];
+
+  const [assetSort, setAssetSort] = useState<{ key: string; dir: "asc" | "desc" }>({ key: "status", dir: "asc" });
   const [assetQuery, setAssetQuery] = useState("");
-  const [serviceStore, setServiceStore] = useState<any[]>(serviceSeed);
+  const [assetStatusFilter, setAssetStatusFilter] = useState<Asset["status"] | null>(null);
+  const [reservFilter, setReservFilter] = useState<ReservFilter>("all");
 
-  const kpi = useMemo(()=>{
-    const total = assetsSeed.length;
-    const rented = assetsSeed.filter(a=>a.status==='rented').length;
-    const ready = assetsSeed.filter(a=>a.status==='ready').length;
-    const maint = assetsSeed.filter(a=>a.status==='maintenance').length;
-    const repair = assetsSeed.filter(a=>a.status==='repair').length;
+  const [assetCardOpen, setAssetCardOpen] = useState(false);
+  const [assetSelected, setAssetSelected] = useState<Asset | null>(null);
+  const [reservRefresh, setReservRefresh] = useState(0);
+  const bump = () => setReservRefresh(x => x + 1);
+
+  const kpi = useMemo(() => {
+    const total = assetsSafe.length;
     return [
-      { key:'total', label:'Всего ДГУ', value: total, click: ()=>{ setActiveTab('assets'); } },
-      { key:'rented', label:'В аренде', value: rented, click: ()=>{ setActiveTab('assets'); } },
-      { key:'ready', label:'Готово к аренде', value: ready, click: ()=>{ setActiveTab('assets'); } },
-      { key:'maintenance', label:'ТО', value: maint, click: ()=>{ setActiveTab('service'); } },
-      { key:'repair', label:'Ремонт', value: repair, click: ()=>{ setActiveTab('service'); } },
+      { key: "total",       label: "Всего ДГУ",       value: total,                              click: () => { setActiveTab("assets"); setAssetStatusFilter(null); } },
+      { key: "rented",      label: "В аренде",        value: assetsSafe.filter(a => a.status === "rented").length,      click: () => { setActiveTab("assets"); setAssetStatusFilter("rented"); } },
+      { key: "ready",       label: "Готово к аренде", value: assetsSafe.filter(a => a.status === "ready").length,       click: () => { setActiveTab("assets"); setAssetStatusFilter("ready"); } },
+      { key: "maintenance", label: "ТО",              value: assetsSafe.filter(a => a.status === "maintenance").length, click: () => { setActiveTab("service"); } },
+      { key: "repair",      label: "Ремонт",          value: assetsSafe.filter(a => a.status === "repair").length,      click: () => { setActiveTab("service"); } },
     ];
-  },[]);
+  }, [assetsSafe]);
 
-  const assetsFiltered = useMemo(()=>{
-    const base = assetsSeed.filter(a=> [a.brand, a.model, a.site, a.customer, a.serialNumber, a.code].join(' ').toLowerCase().includes(assetQuery.toLowerCase()));
-    return sortAssets(base, assetSort.key, assetSort.dir);
-  }, [assetQuery, assetSort]);
+  const assetsFiltered = useMemo(() => {
+    const baseStatus = assetsSafe
+      .filter(a => !assetStatusFilter || a.status === assetStatusFilter)
+      .filter(a =>
+        [a.brand, a.model, a.site, a.code, a.serialNumber, a.customer, a.contract]
+          .join(" ")
+          .toLowerCase()
+          .includes(assetQuery.toLowerCase())
+      );
 
-  const service = useMemo(()=> sortService(serviceStore, serviceSort.key, serviceSort.dir), [serviceStore, serviceSort]);
+    const baseReserv = baseStatus.filter(a => {
+      if (reservFilter === "all")   return true;
+      if (reservFilter === "has")   return hasCurrentOrFutureReservation(a.code);
+      if (reservFilter === "free")  return isFree(a.code);
+      if (reservFilter === "soon7") return hasFutureReservationWithin(a.code, 7);
+      return true;
+    });
 
-  const tests = [
-    { name:"KPI total matches seed", pass: kpi.find(i=>i.key==='total')!.value === assetsSeed.length },
-    { name:"Sort assets by kva asc", pass: sortAssets(assetsSeed, 'kva', 'asc').map(x=>x.kva).join(',') === [...assetsSeed].sort((a,b)=>a.kva-b.kva).map(x=>x.kva).join(',') },
-    { name:"addWorkingDaysFrom skips weekend", pass: (function(){ const r = addWorkingDaysFrom('2025-10-24',1); return r === '2025-10-27'; })() },
-    { name:"addWorkingDaysFrom skips 2025-11-04 holiday", pass: (function(){ const r = addWorkingDaysFrom('2025-11-03',1); return r === '2025-11-05'; })() },
-    { name:"sortService by type asc (ru)", pass: (function(){ const res = sortService(serviceSeed, 'type', 'asc').map(x=>typeLabel(x.type)); const chk = res.slice().sort((a,b)=>a.localeCompare(b,'ru',{sensitivity:'base'})); return res.join('\u0001')===chk.join('\u0001'); })() },
-    { name:"validateWO guards required", pass: (function(){ const r = validateWO({ assetCode:'', type:'PM', priority:'1', eta:''}); return (r as any).ok===false; })() },
-  ];
-  const failed = tests.filter(t=>!t.pass);
-  if (failed.length) console.warn('Self-tests failed:', failed);
+    return sortAssets(baseReserv as any, assetSort.key, assetSort.dir) as Asset[];
+  }, [assetsSafe, assetQuery, assetSort, assetStatusFilter, reservFilter, reservRefresh]);
+
+  function applyStatus(code: string, status: Asset["status"]) {
+    const updated = setStatus(code, status);
+    const nextArr = Array.isArray(updated) ? updated : assetsSafe;
+    setAssets(nextArr);
+    setAssetSelected(nextArr.find(a => a.code === code) || null);
+  }
 
   return (
     <div className="p-6 space-y-6">
@@ -79,107 +88,126 @@ export default function App(){
         <h1 className="text-2xl font-semibold">Управление парком ДГУ</h1>
       </header>
 
+      {/* KPI */}
       <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
-        {kpi.map(item=> (
-          <KPI key={item.key} label={item.label} value={item.value} onClick={item.click}/>
+        {kpi.map(item => (
+          <KPI key={item.key} label={item.label} value={item.value} onClick={item.click} />
         ))}
       </div>
 
-      <Tabs value={activeTab} onValueChange={setActiveTab}>
+      <Tabs value={activeTab} onValueChange={(v) => setActiveTab(v as any)}>
         <TabsList className="rounded-2xl">
           <TabsTrigger value="assets">Активы</TabsTrigger>
           <TabsTrigger value="service">Сервис/ТО</TabsTrigger>
-          <TabsTrigger value="calendar">Календарь</TabsTrigger>
-          <TabsTrigger value="forms">Формы</TabsTrigger>
-          <TabsTrigger value="settings">Настройки</TabsTrigger>
         </TabsList>
 
+        {/* АКТИВЫ */}
         <TabsContent value="assets" className="mt-4">
           <Card className="rounded-2xl">
-            <CardHeader className="pb-2">
-              <CardTitle>Активы</CardTitle>
-            </CardHeader>
+            <CardHeader className="pb-2"><CardTitle>Активы</CardTitle></CardHeader>
             <CardContent>
-              <div className="flex items-center gap-2 mb-3">
-                <Input placeholder="Поиск: бренд, модель, объект, клиент, серийный номер" value={assetQuery} onChange={(e)=>setAssetQuery(e.target.value)} className="rounded-xl"/>
-                <Button variant="outline" className="rounded-xl" onClick={()=>{ const cols=['code','serialNumber','brand','model','kva','status','site','customer']; const rows=[cols.join(',')].concat(assetsFiltered.map(a=>cols.map(c=>a[c]??'').join(','))); download('assets.csv', rows.join("\n")); }}>CSV</Button>
+              <div className="flex flex-col gap-3 mb-3">
+                <div className="flex items-center gap-2">
+                  <Input
+                    placeholder="Поиск: бренд, модель, объект, код, серийный №, заказчик, договор"
+                    value={assetQuery}
+                    onChange={(e) => setAssetQuery(e.target.value)}
+                    className="rounded-xl"
+                  />
+                  <Button
+                    variant="outline"
+                    className="rounded-xl"
+                    onClick={() => {
+                      const cols = ["code", "brand", "model", "kva", "status", "serialNumber", "site", "customer", "contract"];
+                      const rows = [cols].concat(assetsFiltered.map(a => cols.map(c => (a as any)[c] ?? "")));
+                      downloadCSV("assets.csv", rows as any);
+                    }}
+                  >
+                    CSV
+                  </Button>
+                </div>
+
+                {/* Быстрые фильтры по броне */}
+                <div className="flex items-center gap-2 text-sm">
+                  <span className="text-muted-foreground">Быстрый фильтр:</span>
+                  <div className="flex gap-1">
+                    <Button size="sm" variant={reservFilter === "all" ? "default" : "outline"}   className="rounded-xl" onClick={() => setReservFilter("all")}>Все</Button>
+                    <Button size="sm" variant={reservFilter === "has" ? "default" : "outline"}   className="rounded-xl" onClick={() => setReservFilter("has")}>Забронированные</Button>
+                    <Button size="sm" variant={reservFilter === "free" ? "default" : "outline"}  className="rounded-xl" onClick={() => setReservFilter("free")}>Свободные</Button>
+                    <Button size="sm" variant={reservFilter === "soon7" ? "default" : "outline"} className="rounded-xl" onClick={() => setReservFilter("soon7")}>Бронь ≤ 7 дней</Button>
+                  </div>
+                </div>
               </div>
+
               <Table>
                 <TableHeader>
                   <TableRow>
-                    <TableHead onClick={()=>setAssetSort(s=>({ key:'status', dir: s.dir==='asc'?'desc':'asc'}))}>Статус</TableHead>
+                    <TableHead onClick={() => setAssetSort(s => ({ key: "status", dir: s.dir === "asc" ? "desc" : "asc" }))}>Статус</TableHead>
                     <TableHead>Код</TableHead>
-                    <TableHead onClick={()=>setAssetSort(s=>({ key:'kva', dir: s.dir==='asc'?'desc':'asc'}))}>кВА</TableHead>
+                    <TableHead onClick={() => setAssetSort(s => ({ key: "kva", dir: s.dir === "asc" ? "desc" : "asc" }))}>кВА</TableHead>
                     <TableHead>Бренд/Модель</TableHead>
                     <TableHead>Зав.№</TableHead>
-                    <TableHead onClick={()=>setAssetSort(s=>({ key:'site', dir: s.dir==='asc'?'desc':'asc'}))}>Объект</TableHead>
+                    <TableHead onClick={() => setAssetSort(s => ({ key: "site", dir: s.dir === "asc" ? "desc" : "asc" }))}>Объект</TableHead>
+                    <TableHead>Доступность</TableHead>
+                    <TableHead>Бронь</TableHead>
+                    <TableHead>Карточка</TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
-                  {assetsFiltered.map(a=> (
-                    <TableRow key={a.code}>
-                      <TableCell>{a.status}</TableCell>
-                      <TableCell>{a.code}</TableCell>
-                      <TableCell>{a.kva}</TableCell>
-                      <TableCell>{a.brand} {a.model}</TableCell>
-                      <TableCell>{a.serialNumber||'—'}</TableCell>
-                      <TableCell>{a.site||'—'}</TableCell>
-                    </TableRow>
-                  ))}
+                  {assetsFiltered.map(a => {
+                    const avail = availabilityLabel(a.code);
+                    const nr = getNextReservation(a.code);
+                    return (
+                      <TableRow key={a.code}>
+                        <TableCell>{a.status}</TableCell>
+                        <TableCell>{a.code}</TableCell>
+                        <TableCell>{a.kva}</TableCell>
+                        <TableCell>{a.brand} {a.model}</TableCell>
+                        <TableCell>{a.serialNumber ?? "—"}</TableCell>
+                        <TableCell>{a.site ?? "—"}</TableCell>
+                        <TableCell className={avail.muted ? "text-sm text-muted-foreground" : "text-sm"}>{avail.text}</TableCell>
+                        <TableCell className="text-sm">
+                          {nr && nr.startDate && nr.endDate
+                            ? <>Забронирован {nr.startDate.split("-").reverse().join(".")}–{nr.endDate.split("-").reverse().join(".")} ({nr.customer})</>
+                            : <span className="text-muted-foreground">—</span>}
+                        </TableCell>
+                        <TableCell>
+                          <Button size="sm" variant="outline" className="rounded-xl" onClick={() => { setAssetSelected(a); setAssetCardOpen(true); }}>
+                            Открыть
+                          </Button>
+                        </TableCell>
+                      </TableRow>
+                    );
+                  })}
                 </TableBody>
               </Table>
             </CardContent>
           </Card>
         </TabsContent>
 
+        {/* СЕРВИС/ТО (заглушка) */}
         <TabsContent value="service" className="mt-4">
           <Card className="rounded-2xl">
             <CardHeader className="pb-2"><CardTitle>Сервис/ТО</CardTitle></CardHeader>
             <CardContent>
-              <div className="flex items-center gap-2 mb-3">
-                <Button variant="outline" className="rounded-xl" onClick={()=>setServiceSort(s=>({ key:'eta', dir: s.dir==='asc'?'desc':'asc'}))}>Срок выполнения</Button>
-                <Button variant="outline" className="rounded-xl" onClick={()=>setServiceSort(s=>({ key:'priority', dir: s.dir==='asc'?'desc':'asc'}))}>Приоритет</Button>
-                <Button variant="outline" className="rounded-xl" onClick={()=>setServiceSort(s=>({ key:'type', dir: s.dir==='asc'?'desc':'asc'}))}>Тип</Button>
-                <Button className="rounded-xl" onClick={()=>{ const cols=['id','type','status','priority','assetCode','eta','start','end','desc']; const rows=[cols.join(',')].concat(service.map(w=> cols.map(c=> c==='type'? typeLabel(w[c]) : (w[c]??'')).join(','))); download('service.csv', rows.join("\n")); }}>CSV</Button>
-              </div>
-              <Table>
-                <TableHeader>
-                  <TableRow>
-                    <TableHead>Тип</TableHead>
-                    <TableHead>Статус</TableHead>
-                    <TableHead>Приоритет</TableHead>
-                    <TableHead>Актив</TableHead>
-                    <TableHead>Срок выполнения</TableHead>
-                    <TableHead>Описание</TableHead>
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {service.map(w=> (
-                    <TableRow key={w.id}>
-                      <TableCell>{typeLabel(w.type)}</TableCell>
-                      <TableCell>{w.status}</TableCell>
-                      <TableCell>{w.priority}</TableCell>
-                      <TableCell>{w.assetCode}</TableCell>
-                      <TableCell>{w.eta||'—'}</TableCell>
-                      <TableCell className="max-w-[360px] truncate" title={w.desc}>{w.desc}</TableCell>
-                    </TableRow>
-                  ))}
-                </TableBody>
-              </Table>
+              <p>Форма создания наряда (в разработке). Переход сюда с кнопки «Открыть наряд» в карточке работает.</p>
             </CardContent>
           </Card>
         </TabsContent>
-
-        <TabsContent value="forms" className="mt-4">
-          <FormsSectionComponent assets={assetsSeed} onCreate={(wo)=>{ setServiceStore(prev=>[...prev, wo]); setActiveTab('service'); }}/>
-        </TabsContent>
-
-        <TabsContent value="settings" className="mt-4">
-          <SettingsHolidays/>
-        </TabsContent>
       </Tabs>
 
-      <footer className="text-xs text-muted-foreground text-center py-6">© 2025 ООО «Тэтра Инжиниринг» • Управление аренды и сервиса ДГУ • cos φ 0.8, 0.4 кВ</footer>
+      {/* Модалка карточки */}
+      <AssetCard
+        open={assetCardOpen}
+        onOpenChange={(v) => { setAssetCardOpen(v); if (!v) setTimeout(bump, 0); }}
+        asset={assetSelected as any}
+        onOpenWorkOrder={() => setActiveTab("service")}
+        onReady={() => { if (assetSelected) applyStatus(assetSelected.code, "ready"); }}
+      />
+
+      <footer className="text-xs text-muted-foreground text-center py-6">
+        © 2025 ООО «Тэтра Инжиниринг» • Управление аренды и сервиса ДГУ • cos φ 0.8, 0.4 кВ
+      </footer>
     </div>
   );
 }
