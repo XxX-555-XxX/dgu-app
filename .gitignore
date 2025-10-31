@@ -1,0 +1,23 @@
+# deps / сборка
+node_modules/
+dist/
+build/
+.vite/
+coverage/
+
+# среды/локальные
+.env
+.env.*
+*.log
+
+# ОС/редактор
+.DS_Store
+Thumbs.db
+.idea/
+*.iml
+
+# Husky скрипты оставляем, но на всякий — не игнорим .husky:
+# .husky/  (НЕ добавлять)
+
+# кэш/превью
+*.local
