@@ -21,3 +21,6 @@ Thumbs.db
 
 # кэш/превью
 *.local
+
+# Husky service folder (не трекаем)
+.husky/_/
