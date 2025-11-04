@@ -1,138 +1,219 @@
-// src/components/AssetCard.tsx
-import React from "react";
-import {
-  Dialog,
-  DialogContent,
-  DialogHeader,
-  DialogTitle,
-  DialogFooter,
-} from "@/components/ui/dialog";
+import React, { useMemo, useState } from "react";
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Button } from "@/components/ui/button";
-import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import AssetPassport from "@/components/AssetPassport";
-import ReservationDialog from "@/modules/ReservationDialog";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+
+import type { Asset } from "@/lib/storage";
+import { availabilityLabel } from "@/lib/assetSelectors";
 import {
-  listReservationsByAsset,
-  deleteReservation,
+  addReservation,
+  listReservationsForAsset,
+  removeReservation,
   type Reservation,
 } from "@/lib/reservations";
 
-type Asset = {
-  code: string;
-  brand: string;
-  model: string;
-  serialNumber?: string;
-  kva?: number;
-  status?: string;
-};
-
-export default function AssetCard({
-  asset,
-  open,
-  onOpenChange,
-  onOpenWorkOrder,
-  onReady,
-}: {
-  asset: Asset | null;
+type Props = {
   open: boolean;
   onOpenChange: (v: boolean) => void;
-  onOpenWorkOrder: () => void;
-  onReady: () => void;
-}) {
-  const [tab, setTab] = React.useState<"passport" | "reservations">("passport");
-  const [resOpen, setResOpen] = React.useState(false);
-  const [resEdit, setResEdit] = React.useState<Reservation | null>(null);
-  const [reservations, setReservations] = React.useState<Reservation[]>([]);
+  asset: Asset | null;
+};
 
-  const refreshReservations = React.useCallback(() => {
-    if (asset) setReservations(listReservationsByAsset(asset.code));
-  }, [asset]);
+function fmtHuman(iso: string) {
+  return iso.split("-").reverse().join(".");
+}
 
-  React.useEffect(() => {
-    if (open) refreshReservations();
-  }, [open, refreshReservations]);
+export default function AssetCard({ open, onOpenChange, asset }: Props) {
+  const code = asset?.code ?? "";
+  const [tab, setTab] = useState<"passport" | "reserv">("passport");
 
-  if (!asset) return null;
+  const list = useMemo<Reservation[]>(
+    () => (code ? listReservationsForAsset(code) : []),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [code, open] // при каждом открытии пересчитаем
+  );
+
+  const [formOpen, setFormOpen] = useState(false);
+  const [start, setStart] = useState("");
+  const [end, setEnd] = useState("");
+  const [customer, setCustomer] = useState("");
+  const [comment, setComment] = useState("");
+  const [error, setError] = useState<string | null>(null);
+
+  const availability = asset ? availabilityLabel(asset.code) : { text: "" };
+
+  function resetForm() {
+    setStart("");
+    setEnd("");
+    setCustomer("");
+    setComment("");
+    setError(null);
+  }
+
+  function createReservation() {
+    if (!asset) return;
+    try {
+      addReservation({
+        assetCode: asset.code,
+        startDate: start,
+        endDate: end,
+        customer: customer.trim() || "—",
+        comment: comment.trim() || undefined,
+      });
+      resetForm();
+      setFormOpen(false);
+      setTab("reserv");
+    } catch (e: any) {
+      setError(e?.message ?? "Неизвестная ошибка");
+    }
+  }
 
   return (
-    <>
-      <Dialog open={open} onOpenChange={onOpenChange}>
-        {/* ФИКС-HEADER/FOOTER + СКРОЛЛ-СЕРЕДИНА */}
-        <DialogContent className="sm:max-w-3xl p-0 flex flex-col max-h-[85vh]">
-          {/* HEADER (фиксированный) */}
-          <div className="border-b px-6 pt-5 pb-3">
-            <DialogHeader className="mb-2 px-0">
-              <DialogTitle>Карточка актива — {asset.code}</DialogTitle>
-            </DialogHeader>
-            <Tabs
-              value={tab}
-              onValueChange={(v) => setTab(v as "passport" | "reservations")}
-              className="w-full"
-            >
-              <TabsList className="rounded-xl">
-                <TabsTrigger value="passport" className="rounded-lg">Паспорт</TabsTrigger>
-                <TabsTrigger value="reservations" className="rounded-lg">Брони</TabsTrigger>
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="max-w-3xl rounded-2xl">
+        <DialogHeader>
+          <DialogTitle className="text-lg">
+            {asset
+              ? `Карточка актива — ${asset.code} — ${asset.brand} ${asset.model}`
+              : "Брони"}
+          </DialogTitle>
+        </DialogHeader>
+
+        {!asset ? (
+          <div className="text-sm text-muted-foreground">Актив не выбран.</div>
+        ) : (
+          <>
+            <Tabs value={tab} onValueChange={(v) => setTab(v as any)} className="w-full">
+              <TabsList className="rounded-2xl">
+                <TabsTrigger value="passport">Паспорт</TabsTrigger>
+                <TabsTrigger value="reserv">Брони</TabsTrigger>
               </TabsList>
-            </Tabs>
-          </div>
 
-          {/* BODY (скроллируемая середина) */}
-          <div className="px-6 py-4 space-y-4 flex-1 overflow-y-auto">
-            {tab === "passport" && <AssetPassport asset={asset} />}
-
-            {tab === "reservations" && (
-              <div className="space-y-3">
-                {reservations.length === 0 ? (
-                  <div className="text-sm text-muted-foreground">Бронирований пока нет.</div>
-                ) : (
-                  <div className="space-y-2">
-                    {reservations.map((r) => (
-                      <div key={r.id} className="flex items-center justify-between rounded-xl border p-3 bg-white">
-                        <div className="min-w-0">
-                          <div className="font-medium truncate">{r.customer}</div>
-                          <div className="text-sm text-muted-foreground">{r.start} — {r.end}</div>
-                          {r.comment && <div className="text-xs mt-1 text-muted-foreground truncate">{r.comment}</div>}
-                        </div>
-                        <div className="flex gap-2">
-                          <Button variant="outline" size="sm" className="rounded-xl" onClick={() => { setResEdit(r); setResOpen(true); }}>
-                            Изменить
-                          </Button>
-                          <Button variant="destructive" size="sm" className="rounded-xl" onClick={() => { deleteReservation(r.id); refreshReservations(); }}>
-                            Отменить
-                          </Button>
-                        </div>
-                      </div>
-                    ))}
+              {/* ПАСПОРТ */}
+              <TabsContent value="passport" className="pt-3">
+                <div className="text-sm space-y-2">
+                  <div>
+                    <span className="text-muted-foreground">Доступность: </span>
+                    <span className={availability.muted ? "text-muted-foreground" : ""}>
+                      {availability.text}
+                    </span>
                   </div>
-                )}
-                <div>
-                  <Button className="rounded-xl" onClick={() => { setResEdit(null); setResOpen(true); }}>
-                    Добавить бронь
+                  <div>
+                    <span className="text-muted-foreground">Зав. №: </span>
+                    {asset.serialNumber ?? "—"}
+                  </div>
+                  <div>
+                    <span className="text-muted-foreground">Объект: </span>
+                    {asset.site ?? "—"}
+                  </div>
+                  <div>
+                    <span className="text-muted-foreground">Заказчик: </span>
+                    {asset.customer ?? "—"}
+                  </div>
+                  <div>
+                    <span className="text-muted-foreground">Договор: </span>
+                    {asset.contract ?? "—"}
+                  </div>
+                </div>
+              </TabsContent>
+
+              {/* БРОНИ */}
+              <TabsContent value="reserv" className="pt-3">
+                <div className="flex items-center justify-between">
+                  <div className="text-sm text-muted-foreground">
+                    Ближайшая бронь:{" "}
+                    {list[0]
+                      ? `${fmtHuman(list[0].startDate)} — ${fmtHuman(list[0].endDate)} (${list[0].customer})`
+                      : "не запланирована"}
+                  </div>
+                  <Button className="rounded-xl" onClick={() => setFormOpen(true)}>
+                    Создать бронь
                   </Button>
                 </div>
-              </div>
-            )}
-          </div>
 
-          {/* FOOTER (фиксированный) */}
-          <div className="border-t px-6 py-4">
-            <DialogFooter className="gap-2">
-              <Button variant="outline" className="rounded-xl" onClick={onOpenWorkOrder}>Открыть наряд</Button>
-              <Button className="rounded-xl" onClick={() => { setResEdit(null); setResOpen(true); }}>Забронировать</Button>
-              <Button variant="secondary" className="rounded-xl" onClick={onReady}>Готов к аренде</Button>
-            </DialogFooter>
-          </div>
-        </DialogContent>
-      </Dialog>
+                <div className="mt-3 space-y-3">
+                  {list.length === 0 && (
+                    <div className="text-sm text-muted-foreground">Нет данных для бронирования.</div>
+                  )}
 
-      {/* Модалка бронирования */}
-      <ReservationDialog
-        open={resOpen}
-        onOpenChange={(v) => { setResOpen(v); if (!v) setResEdit(null); }}
-        assetCode={asset.code}
-        edit={resEdit}
-        onSaved={refreshReservations}
-      />
-    </>
+                  {list.map((r) => (
+                    <div
+                      key={r.id}
+                      className="border rounded-xl p-3 flex items-center justify-between"
+                    >
+                      <div className="text-sm">
+                        <div className="font-medium">
+                          {fmtHuman(r.startDate)} — {fmtHuman(r.endDate)}
+                        </div>
+                        <div className="text-muted-foreground">{r.customer}</div>
+                        {r.comment && <div className="text-muted-foreground mt-1">{r.comment}</div>}
+                      </div>
+                      <Button
+                        variant="outline"
+                        className="rounded-xl"
+                        onClick={() => removeReservation(r.id)}
+                      >
+                        Удалить
+                      </Button>
+                    </div>
+                  ))}
+                </div>
+              </TabsContent>
+            </Tabs>
+
+            {/* Форма создания брони (вторая модалка внутри карточки) */}
+            <Dialog open={formOpen} onOpenChange={setFormOpen}>
+              <DialogContent className="max-w-xl rounded-2xl">
+                <DialogHeader>
+                  <DialogTitle>Создать бронь</DialogTitle>
+                </DialogHeader>
+
+                <div className="space-y-3">
+                  <div className="space-y-1">
+                    <Label>Дата начала</Label>
+                    <Input type="date" value={start} onChange={(e) => setStart(e.target.value)} />
+                  </div>
+                  <div className="space-y-1">
+                    <Label>Дата окончания</Label>
+                    <Input type="date" value={end} onChange={(e) => setEnd(e.target.value)} />
+                  </div>
+                  <div className="space-y-1">
+                    <Label>Клиент / ответственный</Label>
+                    <Input value={customer} onChange={(e) => setCustomer(e.target.value)} />
+                  </div>
+                  <div className="space-y-1">
+                    <Label>Комментарий (опционально)</Label>
+                    <Input value={comment} onChange={(e) => setComment(e.target.value)} />
+                  </div>
+
+                  {error && <div className="text-sm text-red-500">{error}</div>}
+
+                  <div className="flex items-center justify-end gap-2 pt-2">
+                    <Button
+                      variant="outline"
+                      className="rounded-xl"
+                      onClick={() => {
+                        resetForm();
+                        setFormOpen(false);
+                      }}
+                    >
+                      Отмена
+                    </Button>
+                    <Button
+                      className="rounded-xl"
+                      disabled={!start || !end}
+                      onClick={createReservation}
+                    >
+                      Сохранить
+                    </Button>
+                  </div>
+                </div>
+              </DialogContent>
+            </Dialog>
+          </>
+        )}
+      </DialogContent>
+    </Dialog>
   );
 }

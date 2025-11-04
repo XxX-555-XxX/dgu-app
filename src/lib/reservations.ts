@@ -1,70 +1,98 @@
-// src/lib/reservations.ts
-// Единая точка API для бронирований + настройки буфера. Совместимо с App.tsx.
+// Простое хранилище броней + события для подписки
 
-export type { Reservation } from "@/lib/storage";
+export type Reservation = {
+  id: string;
+  assetCode: string;
+  customer: string;
+  comment?: string;
+  startDate: string; // YYYY-MM-DD
+  endDate: string;   // YYYY-MM-DD включительно
+};
 
-// --- Буфер рабочих дней между бронями (локально) ---
-const BUFFER_KEY = "reservation:bufferDays";
-const DEFAULT_BUFFER = 1;
+const STORAGE_KEY = "dgu.reservations.v1";
 
-export function getReservationBufferDays(): number {
+function readAll(): Reservation[] {
   try {
-    const raw = localStorage.getItem(BUFFER_KEY);
-    const n = raw == null ? NaN : parseInt(raw, 10);
-    return Number.isFinite(n) && n >= 0 ? n : DEFAULT_BUFFER;
+    const raw = localStorage.getItem(STORAGE_KEY);
+    if (!raw) return [];
+    const arr = JSON.parse(raw);
+    return Array.isArray(arr) ? (arr as Reservation[]) : [];
   } catch {
-    return DEFAULT_BUFFER;
+    return [];
   }
 }
 
-export function setReservationBufferDays(n: number): number {
-  const v = Math.max(0, Math.floor(Number(n)));
-  try { localStorage.setItem(BUFFER_KEY, String(v)); } catch {}
-  return v;
+function writeAll(list: Reservation[]) {
+  localStorage.setItem(STORAGE_KEY, JSON.stringify(list));
 }
 
-// --- Базовые CRUD/утилиты из storage.ts ---
-import {
-  addReservation as _addReservation,
-  removeReservation as _removeReservation,
-  listReservationsByAsset as _listReservationsByAsset,
-  overlapsAny as _overlapsAny,
-} from "@/lib/storage";
-
-export const addReservation    = _addReservation;
-export const deleteReservation = _removeReservation; // имя, которое ждут компоненты
-export const overlapsAny       = _overlapsAny;
-
-// --- Совместимые с App.tsx обёртки ---
-
-export type CalendarReservation = {
-  id: string;
-  customer: string;
-  startDate: string; // YYYY-MM-DD
-  endDate: string;   // YYYY-MM-DD
-  comment?: string;
-};
-
-/** Возвращает брони по активу в формате {startDate,endDate} */
-export function listReservations(assetCode: string): CalendarReservation[] {
-  const rows = _listReservationsByAsset(assetCode);
-  return rows.map(r => ({
-    id: r.id,
-    customer: r.customer,
-    startDate: r.start,
-    endDate: r.end,
-    comment: r.comment,
-  }));
+function fmt(d: string) {
+  // валидация
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(d)) throw new Error("Bad date format, expected YYYY-MM-DD");
 }
 
-/** Ближайшая будущая бронь для актива */
-export function nextReservation(assetCode: string): CalendarReservation | null {
-  const today = new Date().toISOString().slice(0,10);
-  const rows = listReservations(assetCode)
-    .filter(r => r.startDate >= today)
-    .sort((a,b) => a.startDate.localeCompare(b.startDate));
-  return rows[0] ?? null;
+function overlaps(aStart: string, aEnd: string, bStart: string, bEnd: string) {
+  return aStart <= bEnd && bStart <= aEnd;
 }
 
-/** Исходный список без маппинга — нужен для модулей */
-export const listReservationsByAsset = _listReservationsByAsset;
+// ---------- публичное API
+
+export function listReservationsForAsset(assetCode: string): Reservation[] {
+  return readAll()
+    .filter((r) => r.assetCode === assetCode)
+    .sort((a, b) => a.startDate.localeCompare(b.startDate));
+}
+
+export function listReservations(): Reservation[] {
+  return readAll().sort((a, b) => a.startDate.localeCompare(b.startDate));
+}
+
+export function addReservation(input: Omit<Reservation, "id">): Reservation {
+  fmt(input.startDate);
+  fmt(input.endDate);
+  if (input.startDate > input.endDate) {
+    throw new Error("Дата начала позже даты окончания");
+  }
+
+  const all = readAll();
+  // запрет пересечений по одному активу
+  const sameAsset = all.filter((r) => r.assetCode === input.assetCode);
+  const conflict = sameAsset.find((r) => overlaps(r.startDate, r.endDate, input.startDate, input.endDate));
+  if (conflict) {
+    throw new Error("Даты пересекаются с существующей бронью");
+  }
+
+  const created: Reservation = { ...input, id: crypto.randomUUID() };
+  all.push(created);
+  writeAll(all);
+
+  // событие на весь проект — чтобы обновлялись таблицы/карточки
+  window.dispatchEvent(new CustomEvent("reservations:updated"));
+  return created;
+}
+
+export function removeReservation(id: string): void {
+  const all = readAll();
+  const next = all.filter((r) => r.id !== id);
+  writeAll(next);
+  window.dispatchEvent(new CustomEvent("reservations:updated"));
+}
+
+export function nextReservation(assetCode: string): Reservation | null {
+  const today = new Date().toISOString().slice(0, 10);
+  const list = listReservationsForAsset(assetCode);
+  return list.find((r) => r.endDate >= today) || null;
+}
+
+export function isReservedNow(assetCode: string): boolean {
+  const today = new Date().toISOString().slice(0, 10);
+  return listReservationsForAsset(assetCode).some((r) => r.startDate <= today && today <= r.endDate);
+}
+
+export function hasFutureWithin(assetCode: string, days: number): boolean {
+  const today = new Date();
+  const limit = new Date(today);
+  limit.setDate(limit.getDate() + days);
+  const lim = limit.toISOString().slice(0, 10);
+  return listReservationsForAsset(assetCode).some((r) => r.startDate > today.toISOString().slice(0, 10) && r.startDate <= lim);
+}

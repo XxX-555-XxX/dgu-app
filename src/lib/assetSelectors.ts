@@ -1,63 +1,46 @@
-// src/lib/assetSelectors.ts
-// Чистые хелперы и селекторы по броням/доступности активов.
-// Цель — разгрузить компоненты (особенно App.tsx).
+// Обёртки над reservations для строк таблицы
 
-import { listReservations, nextReservation } from "@/lib/reservations";
+import {
+  isReservedNow,
+  nextReservation,
+  hasFutureWithin,
+} from "@/lib/reservations";
 
-export type Availability = { text: string; muted?: boolean };
-
-export function todayISO(): string {
-  return new Date().toISOString().slice(0, 10);
-}
-
-export function safeReservations(assetCode: string) {
-  return (listReservations(assetCode) || [])
-    .filter(r => r && typeof r.startDate === "string" && typeof r.endDate === "string" && r.startDate && r.endDate);
-}
-
-export function hasCurrentOrFutureReservation(assetCode: string): boolean {
-  const t = todayISO();
-  return safeReservations(assetCode).some(r => r.endDate >= t);
-}
-
-export function hasFutureReservationWithin(assetCode: string, days: number): boolean {
-  const t = todayISO();
-  const bound = addDaysISO(t, days);
-  return safeReservations(assetCode).some(r => r.startDate > t && r.startDate <= bound);
-}
-
+/** Свободен ли актив с точки зрения броней прямо сейчас */
 export function isFree(assetCode: string): boolean {
-  const t = todayISO();
-  return !safeReservations(assetCode).some(r => r.endDate >= t);
+  return !isReservedNow(assetCode);
 }
 
-export function availabilityLabel(assetCode: string): Availability {
-  const t = todayISO();
-  const all = safeReservations(assetCode).sort((a, b) => (a.startDate || "").localeCompare(b.startDate || ""));
-  const current = all.find(r => r.startDate <= t && t <= r.endDate);
-  if (current) return { text: `Забронирован сейчас (до ${fmtDate(current.endDate)}, ${current.customer})` };
-  const next = all.find(r => r.startDate > t);
-  if (next) return { text: `Доступен до начала брони: ${fmtDate(next.startDate)} (${next.customer})` };
-  return { text: "Свободен", muted: true };
+/** Есть ли текущая или будущая бронь */
+export function hasCurrentOrFutureReservation(assetCode: string): boolean {
+  const nr = nextReservation(assetCode);
+  return !!nr;
 }
 
+/** Есть ли будущая бронь в пределах N дней */
+export function hasFutureReservationWithin(assetCode: string, days: number): boolean {
+  return hasFutureWithin(assetCode, days);
+}
+
+/** Ближайшая бронь */
 export function getNextReservation(assetCode: string) {
-  try { return nextReservation(assetCode); } catch { return null; }
+  return nextReservation(assetCode);
 }
 
-// --- Вспомогательные утилиты (локальные) ---
-export function addDaysISO(iso: string, days: number): string {
-  const [y, m, d] = iso.split("-").map(n => parseInt(n, 10));
-  const dt = new Date(y, m - 1, d);
-  dt.setDate(dt.getDate() + days);
-  const yyyy = dt.getFullYear();
-  const mm = String(dt.getMonth() + 1).padStart(2, "0");
-  const dd = String(dt.getDate()).padStart(2, "0");
-  return `${yyyy}-${mm}-${dd}`;
-}
+/** Текст в колонке «Доступность» + muted, если текст второстепенный */
+export function availabilityLabel(assetCode: string): { text: string; muted?: boolean } {
+  const nr = nextReservation(assetCode);
+  const today = new Date().toISOString().slice(0, 10);
 
-export function fmtDate(s?: string) {
-  if (!s) return "";
-  const [y, m, d] = s.split("-");
-  return `${d}.${m}.${y}`;
+  const toHuman = (iso: string) => iso.split("-").reverse().join(".");
+
+  if (!nr) return { text: "Свободен" };
+
+  if (nr.startDate <= today && today <= nr.endDate) {
+    return { text: `Забронирован до: ${toHuman(nr.endDate)} (${nr.customer})` };
+  }
+  return {
+    text: `Доступен до начала брони: ${toHuman(nr.startDate)} (${nr.customer})`,
+    muted: true,
+  };
 }
