@@ -1,66 +1,72 @@
-import React, { useState, useEffect } from "react";
-import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+// src/modules/SettingsReservations.tsx
+import React, { useMemo, useState } from "react";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { getReservationBufferDays, setReservationBufferDays } from "@/lib/reservations";
-import { addWorkingDaysFrom } from "@/lib/workdays";
+import { addWorkingDaysFrom, getHolidays } from "@/lib/workdays";
 
-type Props = {
-  open: boolean;
-  onOpenChange: (v: boolean) => void;
-};
+export default function SettingsReservations() {
+  const [buffer, setBuffer] = useState<number>(() => getReservationBufferDays());
+  const holidays = useMemo(() => getHolidays(), []);
 
-export default function SettingsReservations({ open, onOpenChange }: Props) {
-  const [val, setVal] = useState<number>(1);
-  const [sample, setSample] = useState<{ from: string; to: string }>({ from: "", to: "" });
-
-  useEffect(() => {
-    if (open) {
-      const cur = getReservationBufferDays();
-      setVal(cur);
-      const from = new Date().toISOString().slice(0, 10);
-      const to = addWorkingDaysFrom(from, cur);
-      setSample({ from, to });
-    }
-  }, [open]);
-
-  function onChange(n: string) {
-    const num = parseInt(n, 10);
-    setVal(Number.isFinite(num) && num >= 0 ? num : 0);
-    const from = new Date().toISOString().slice(0, 10);
-    const to = addWorkingDaysFrom(from, Number.isFinite(num) && num >= 0 ? num : 0);
-    setSample({ from, to });
-  }
-
-  function save() {
-    const saved = setReservationBufferDays(val);
-    // Можно подсветить тостом, но сейчас просто закрываем
-    onOpenChange(false);
-  }
+  const [previewStart, setPreviewStart] = useState(() => new Date().toISOString().slice(0, 10));
+  const previewEnd = useMemo(
+    () => addWorkingDaysFrom(previewStart, buffer, holidays),
+    [previewStart, buffer, holidays],
+  );
 
   return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-w-lg rounded-2xl">
-        <DialogHeader>
-          <DialogTitle>Настройки бронирования</DialogTitle>
-        </DialogHeader>
+    <Card>
+      <CardHeader>
+        <CardTitle>Настройки бронирований</CardTitle>
+      </CardHeader>
+      <CardContent className="space-y-3">
+        <div className="space-y-1">
+          <div className="text-sm">
+            Буфер рабочих дней после возврата (учитывать праздники/выходные)
+          </div>
+          <Input
+            type="number"
+            min={0}
+            value={buffer}
+            onChange={(e) => setBuffer(Number(e.target.value || 0))}
+            className="w-32"
+          />
+        </div>
 
-        <div className="space-y-4">
-          <div>
-            <div className="text-sm font-medium mb-1">Буфер между бронями, рабочих дней</div>
-            <Input type="number" min={0} value={val} onChange={(e)=>onChange(e.target.value)} />
-            <div className="text-xs text-muted-foreground mt-1">
-              Пример: если сегодня {sample.from}, то дата «+ буфер» = {sample.to}.
-              Диапазоны бронирований не должны начинаться раньше этой даты относительно соседних окон.
-            </div>
+        <div className="space-y-1">
+          <div className="text-sm text-muted-foreground">Превью расчёта</div>
+          <div className="flex items-center gap-2">
+            <Input
+              type="date"
+              value={previewStart}
+              onChange={(e) => setPreviewStart(e.target.value)}
+            />
+            <span>→</span>
+            <Input type="date" value={previewEnd} readOnly />
           </div>
         </div>
 
-        <DialogFooter>
-          <Button variant="outline" onClick={()=>onOpenChange(false)}>Отмена</Button>
-          <Button onClick={save}>Сохранить</Button>
-        </DialogFooter>
-      </DialogContent>
-    </Dialog>
+        <div className="flex gap-2">
+          <Button
+            className="rounded-xl"
+            onClick={() => {
+              setReservationBufferDays(buffer);
+              alert("Сохранено");
+            }}
+          >
+            Сохранить
+          </Button>
+          <Button
+            variant="outline"
+            className="rounded-xl"
+            onClick={() => setBuffer(getReservationBufferDays())}
+          >
+            Отменить
+          </Button>
+        </div>
+      </CardContent>
+    </Card>
   );
 }
