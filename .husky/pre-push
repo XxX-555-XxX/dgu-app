@@ -1,2 +1,13 @@
 #!/usr/bin/env sh
-npm run typecheck && npm run lint && npm run build
+. "$(dirname -- "$0")/_/husky.sh"
+
+branch="$(git rev-parse --abbrev-ref HEAD)"
+
+if [ "$branch" != "main" ]; then
+  echo "pre-push: feature branch → skip lint; run typecheck+build only"
+  npm run typecheck && npm run build || exit 1
+  exit 0
+fi
+
+# для main тоже без линта (линт не блокирующий — идёт в CI)
+npm run typecheck && npm run build || exit 1
