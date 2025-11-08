@@ -17,15 +17,30 @@ import AssetCard from "@/components/AssetCard";
 import KPI from "@/components/KPI";
 import { downloadCSV, sortAssets } from "@/lib/utils";
 import { loadAssets, setStatus, type Asset } from "@/lib/storage";
-import {
-  availabilityLabel,
-  getNextReservation,
-  hasCurrentOrFutureReservation,
-  hasFutureReservationWithin,
-  isFree,
-} from "@/lib/assetSelectors";
+import { availabilityLabel, nextReservation } from "@/lib/assetSelectors";
 
-// Минимальный seed — остальное подхватывается из storage.ts миграцией
+// --------- Локальные помощники для фильтров резервов (вместо отсутствующих экспортов) ---------
+function hasCurrentOrFutureReservationLocal(assetCode: string): boolean {
+  const nr = nextReservation(assetCode);
+  if (!nr) return false;
+  // если есть ближайшая бронь — либо уже идёт, либо будет в будущем
+  return true;
+}
+
+function isFreeLocal(assetCode: string): boolean {
+  return !hasCurrentOrFutureReservationLocal(assetCode);
+}
+
+function hasFutureReservationWithinLocal(assetCode: string, days: number): boolean {
+  const nr = nextReservation(assetCode);
+  if (!nr || !nr.startDate) return false;
+  const today = new Date();
+  const start = new Date(nr.startDate);
+  const diffDays = Math.floor((start.getTime() - today.getTime()) / (1000 * 60 * 60 * 24));
+  return diffDays >= 0 && diffDays <= days;
+}
+// ------------------------------------------------------------------------------------------------
+
 const assetsSeed: Asset[] = [
   {
     code: "DGU-001",
@@ -63,7 +78,6 @@ type ReservFilter = "all" | "has" | "free" | "soon7";
 export default function App() {
   const [activeTab, setActiveTab] = useState<"assets" | "service">("assets");
 
-  // загрузка активов из storage (с seed по умолчанию)
   const [assets, setAssets] = useState<Asset[]>(() => {
     const loaded = loadAssets(assetsSeed);
     return Array.isArray(loaded) ? loaded : assetsSeed;
@@ -147,14 +161,14 @@ export default function App() {
         [a.brand, a.model, a.site, a.code, a.serialNumber, a.customer, a.contract]
           .join(" ")
           .toLowerCase()
-          .includes(assetQuery.toLowerCase())
+          .includes(assetQuery.toLowerCase()),
       );
 
     const baseReserv = baseStatus.filter((a) => {
       if (reservFilter === "all") return true;
-      if (reservFilter === "has") return hasCurrentOrFutureReservation(a.code);
-      if (reservFilter === "free") return isFree(a.code);
-      if (reservFilter === "soon7") return hasFutureReservationWithin(a.code, 7);
+      if (reservFilter === "has") return hasCurrentOrFutureReservationLocal(a.code);
+      if (reservFilter === "free") return isFreeLocal(a.code);
+      if (reservFilter === "soon7") return hasFutureReservationWithinLocal(a.code, 7);
       return true;
     });
 
@@ -218,7 +232,7 @@ export default function App() {
                         "contract",
                       ];
                       const rows = [cols].concat(
-                        assetsFiltered.map((a) => cols.map((c) => (a as any)[c] ?? ""))
+                        assetsFiltered.map((a) => cols.map((c) => (a as any)[c] ?? "")),
                       );
                       downloadCSV("assets.csv", rows as any);
                     }}
@@ -311,7 +325,7 @@ export default function App() {
                 <TableBody>
                   {assetsFiltered.map((a) => {
                     const avail = availabilityLabel(a.code);
-                    const nr = getNextReservation(a.code);
+                    const nr = nextReservation(a.code);
                     return (
                       <TableRow key={a.code}>
                         <TableCell>{a.status}</TableCell>
@@ -322,20 +336,12 @@ export default function App() {
                         </TableCell>
                         <TableCell>{a.serialNumber ?? "—"}</TableCell>
                         <TableCell>{a.site ?? "—"}</TableCell>
-                        <TableCell
-                          className={avail.muted ? "text-sm text-muted-foreground" : "text-sm"}
-                        >
-                          {avail.text}
-                        </TableCell>
+                        <TableCell className="text-sm">{avail.text}</TableCell>
                         <TableCell className="text-sm">
                           {nr && nr.startDate && nr.endDate ? (
                             <>
-                              Забронирован{" "}
-                              {nr.startDate.split("-").reverse().join(".")}–{nr.endDate
-                                .split("-")
-                                .reverse()
-                                .join(".")}{" "}
-                              ({nr.customer})
+                              Забронирован {nr.startDate.split("-").reverse().join(".")}–
+                              {nr.endDate.split("-").reverse().join(".")} ({nr.customer})
                             </>
                           ) : (
                             <span className="text-muted-foreground">—</span>
@@ -380,19 +386,16 @@ export default function App() {
       </Tabs>
 
       {/* Модалка карточки */}
-      <AssetCard
-        open={assetCardOpen}
-        onOpenChange={(v) => {
-          setAssetCardOpen(v);
-          if (!v) {
-            // ВАЖНО: очищаем выбранный актив, чтобы кнопка «Открыть» снова работала
+      {assetCardOpen && (
+        <AssetCard
+          asset={assetSelected as any}
+          onClose={() => {
+            setAssetCardOpen(false);
             setAssetSelected(null);
-            // На всякий случай дёрнем перерасчёт таблицы
             setTimeout(bump, 0);
-          }
-        }}
-        asset={assetSelected as any}
-      />
+          }}
+        />
+      )}
 
       <footer className="text-xs text-muted-foreground text-center py-6">
         © 2025 ООО «Тэтра Инжиниринг» • Управление аренды и сервиса ДГУ •

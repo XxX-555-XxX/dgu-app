@@ -1,31 +1,24 @@
-// src/lib/settings.ts
-// Единая точка для настроек буфера и праздников.
-// Читает то, что выставляют страницы настроек (если они у тебя уже есть).
+// Настройки проекта: праздники и т.п. (локальное хранилище)
 
-export type Settings = {
-  bufferWorkingDays: number;
-  holidays: string[]; // массив ISO-дат YYYY-MM-DD
-};
+const LS = typeof window !== "undefined" ? window.localStorage : undefined;
+const HOLIDAYS_KEY = "settings:holidays"; // массив ISO-дат 'YYYY-MM-DD'
 
-const LS_RESERVATION = "reservationSettings"; // { bufferWorkingDays }
-const LS_HOLIDAYS = "holidays";               // string[] ISO
-
-const defaults: Settings = {
-  bufferWorkingDays: 2,
-  holidays: [],
-};
-
-export function getSettings(): Settings {
+// Прочитать список праздников
+export function getHolidays(): string[] {
+  if (!LS) return [];
   try {
-    const rawRes = localStorage.getItem(LS_RESERVATION);
-    const rawHol = localStorage.getItem(LS_HOLIDAYS);
-    const res = rawRes ? JSON.parse(rawRes) : {};
-    const hol = rawHol ? JSON.parse(rawHol) : [];
-    return {
-      bufferWorkingDays: Number(res.bufferWorkingDays ?? defaults.bufferWorkingDays),
-      holidays: Array.isArray(hol) ? hol : [],
-    };
+    const raw = LS.getItem(HOLIDAYS_KEY);
+    if (!raw) return [];
+    const arr = JSON.parse(raw) as string[];
+    return Array.isArray(arr) ? arr : [];
   } catch {
-    return defaults;
+    return [];
   }
+}
+
+// Сохранить список праздников
+export function setHolidays(list: string[]) {
+  if (!LS) return;
+  const clean = (list ?? []).map((s) => String(s).trim()).filter(Boolean);
+  LS.setItem(HOLIDAYS_KEY, JSON.stringify(clean));
 }

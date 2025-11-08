@@ -1,27 +1,27 @@
-// src/lib/workdays.ts
-// Работа с рабочими днями: выходные + настраиваемые праздники (массив ISO-дат)
+// Работа с рабочими днями
 
-export function isWeekend(date: Date) {
-  const d = date.getDay();
-  return d === 0 || d === 6; // вс/сб
-}
-
-export function isHolidayISO(iso: string, holidays: string[]) {
-  return holidays.includes(iso);
-}
-
-export function isWeekendOrHoliday(date: Date, holidays: string[]) {
-  const iso = date.toISOString().slice(0, 10);
-  return isWeekend(date) || isHolidayISO(iso, holidays);
-}
-
-/** Добавить N рабочих дней к дате (возвращает новую дату) */
-export function addWorkingDays(date: Date, n: number, holidays: string[]) {
+/**
+ * Возвращает true, если дата НЕ праздник и не выходной (сб/вс).
+ * holidays: массив ISO-дней 'YYYY-MM-DD'
+ */
+export function isWorkingDay(date: Date, holidays: string[]): boolean {
   const d = new Date(date);
-  let left = n;
+  const day = d.getDay(); // 0..6 (0=вс)
+  if (day === 0 || day === 6) return false;
+  const iso = d.toISOString().slice(0, 10);
+  return !holidays.includes(iso);
+}
+
+/**
+ * Прибавляет N рабочих дней к дате (учитывая выходные и holidays).
+ * Возвращает новую дату (UTC ISO корректна).
+ */
+export function addWorkingDays(date: Date, n: number, holidays: string[]): Date {
+  let left = Math.max(0, Math.floor(n));
+  let cur = new Date(date);
   while (left > 0) {
-    d.setDate(d.getDate() + 1);
-    if (!isWeekendOrHoliday(d, holidays)) left--;
+    cur.setDate(cur.getDate() + 1);
+    if (isWorkingDay(cur, holidays)) left -= 1;
   }
-  return d;
+  return cur;
 }

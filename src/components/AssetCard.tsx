@@ -1,219 +1,125 @@
 import React, { useMemo, useState } from "react";
-import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Button } from "@/components/ui/button";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Label } from "@/components/ui/label";
 
-import type { Asset } from "@/lib/storage";
+import { addReservation, listReservations, toISO, Reservation } from "@/lib/reservations";
 import { availabilityLabel } from "@/lib/assetSelectors";
-import {
-  addReservation,
-  listReservationsForAsset,
-  removeReservation,
-  type Reservation,
-} from "@/lib/reservations";
 
-type Props = {
-  open: boolean;
-  onOpenChange: (v: boolean) => void;
-  asset: Asset | null;
+type Asset = {
+  id: string;
+  code: string;
+  brand?: string;
+  model?: string;
 };
 
-function fmtHuman(iso: string) {
-  return iso.split("-").reverse().join(".");
+type Props = {
+  asset: Asset;
+  onClose?: () => void;
+};
+
+// локальный форматтер, устойчивый к undefined
+function fmtHuman(iso?: string): string {
+  if (!iso) return "—";
+  const d = new Date(iso);
+  return Number.isNaN(d.getTime()) ? "—" : d.toLocaleDateString("ru-RU");
 }
 
-export default function AssetCard({ open, onOpenChange, asset }: Props) {
-  const code = asset?.code ?? "";
-  const [tab, setTab] = useState<"passport" | "reserv">("passport");
-
-  const list = useMemo<Reservation[]>(
-    () => (code ? listReservationsForAsset(code) : []),
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    [code, open] // при каждом открытии пересчитаем
-  );
-
-  const [formOpen, setFormOpen] = useState(false);
-  const [start, setStart] = useState("");
-  const [end, setEnd] = useState("");
+export default function AssetCard({ asset }: Props) {
   const [customer, setCustomer] = useState("");
   const [comment, setComment] = useState("");
-  const [error, setError] = useState<string | null>(null);
+  const [start, setStart] = useState("");
+  const [end, setEnd] = useState("");
+  const [ver, setVer] = useState(0);
 
-  const availability = asset ? availabilityLabel(asset.code) : { text: "" };
+  const list = useMemo<Reservation[]>(
+    () => listReservations().filter((r) => r.assetId === asset.id),
+    [asset.id, ver],
+  );
 
-  function resetForm() {
-    setStart("");
-    setEnd("");
+  const info = availabilityLabel(asset.id);
+
+  const add = () => {
+    if (!start || !end) return;
+    const startISO = toISO(new Date(start));
+    const endISO = toISO(new Date(end));
+
+    // примитивная проверка пересечений
+    const intersect = list.some((r) => {
+      const s = toISO(r.startDate ?? "");
+      const e = toISO(r.endDate ?? "");
+      return !(endISO < s || startISO > e);
+    });
+    if (intersect) {
+      alert("Даты пересекаются с существующей бронью.");
+      return;
+    }
+
+    addReservation({
+      assetId: asset.id,
+      startDate: startISO,
+      endDate: endISO,
+      customer,
+      comment: comment.trim() || undefined,
+    });
+
     setCustomer("");
     setComment("");
-    setError(null);
-  }
-
-  function createReservation() {
-    if (!asset) return;
-    try {
-      addReservation({
-        assetCode: asset.code,
-        startDate: start,
-        endDate: end,
-        customer: customer.trim() || "—",
-        comment: comment.trim() || undefined,
-      });
-      resetForm();
-      setFormOpen(false);
-      setTab("reserv");
-    } catch (e: any) {
-      setError(e?.message ?? "Неизвестная ошибка");
-    }
-  }
+    setStart("");
+    setEnd("");
+    setVer((v) => v + 1);
+  };
 
   return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-w-3xl rounded-2xl">
-        <DialogHeader>
-          <DialogTitle className="text-lg">
-            {asset
-              ? `Карточка актива — ${asset.code} — ${asset.brand} ${asset.model}`
-              : "Брони"}
-          </DialogTitle>
-        </DialogHeader>
+    <Card>
+      <CardHeader>
+        <CardTitle>
+          Карточка актива — {asset.code}
+          {asset.brand ? ` — ${asset.brand}` : ""} {asset.model ?? ""}
+        </CardTitle>
+      </CardHeader>
+      <CardContent className="space-y-4">
+        <div className="text-sm opacity-80">{info.text}</div>
 
-        {!asset ? (
-          <div className="text-sm text-muted-foreground">Актив не выбран.</div>
-        ) : (
-          <>
-            <Tabs value={tab} onValueChange={(v) => setTab(v as any)} className="w-full">
-              <TabsList className="rounded-2xl">
-                <TabsTrigger value="passport">Паспорт</TabsTrigger>
-                <TabsTrigger value="reserv">Брони</TabsTrigger>
-              </TabsList>
+        <Tabs defaultValue="passport">
+          <TabsList>
+            <TabsTrigger value="passport">Паспорт</TabsTrigger>
+            <TabsTrigger value="reservations">Брони</TabsTrigger>
+          </TabsList>
 
-              {/* ПАСПОРТ */}
-              <TabsContent value="passport" className="pt-3">
-                <div className="text-sm space-y-2">
-                  <div>
-                    <span className="text-muted-foreground">Доступность: </span>
-                    <span className={availability.muted ? "text-muted-foreground" : ""}>
-                      {availability.text}
-                    </span>
-                  </div>
-                  <div>
-                    <span className="text-muted-foreground">Зав. №: </span>
-                    {asset.serialNumber ?? "—"}
-                  </div>
-                  <div>
-                    <span className="text-muted-foreground">Объект: </span>
-                    {asset.site ?? "—"}
-                  </div>
-                  <div>
-                    <span className="text-muted-foreground">Заказчик: </span>
-                    {asset.customer ?? "—"}
-                  </div>
-                  <div>
-                    <span className="text-muted-foreground">Договор: </span>
-                    {asset.contract ?? "—"}
-                  </div>
-                </div>
-              </TabsContent>
+          <TabsContent value="passport">Раздел «Паспорт» — ваш контент.</TabsContent>
 
-              {/* БРОНИ */}
-              <TabsContent value="reserv" className="pt-3">
-                <div className="flex items-center justify-between">
-                  <div className="text-sm text-muted-foreground">
-                    Ближайшая бронь:{" "}
-                    {list[0]
-                      ? `${fmtHuman(list[0].startDate)} — ${fmtHuman(list[0].endDate)} (${list[0].customer})`
-                      : "не запланирована"}
-                  </div>
-                  <Button className="rounded-xl" onClick={() => setFormOpen(true)}>
-                    Создать бронь
-                  </Button>
-                </div>
+          <TabsContent value="reservations" className="space-y-3">
+            {list.length ? (
+              <ul className="list-disc pl-5">
+                {list.map((r) => (
+                  <li key={r.id}>
+                    {fmtHuman(r.startDate)} — {fmtHuman(r.endDate)}{" "}
+                    {r.customer ? `(${r.customer})` : ""}
+                  </li>
+                ))}
+              </ul>
+            ) : (
+              <div>Броней нет</div>
+            )}
 
-                <div className="mt-3 space-y-3">
-                  {list.length === 0 && (
-                    <div className="text-sm text-muted-foreground">Нет данных для бронирования.</div>
-                  )}
-
-                  {list.map((r) => (
-                    <div
-                      key={r.id}
-                      className="border rounded-xl p-3 flex items-center justify-between"
-                    >
-                      <div className="text-sm">
-                        <div className="font-medium">
-                          {fmtHuman(r.startDate)} — {fmtHuman(r.endDate)}
-                        </div>
-                        <div className="text-muted-foreground">{r.customer}</div>
-                        {r.comment && <div className="text-muted-foreground mt-1">{r.comment}</div>}
-                      </div>
-                      <Button
-                        variant="outline"
-                        className="rounded-xl"
-                        onClick={() => removeReservation(r.id)}
-                      >
-                        Удалить
-                      </Button>
-                    </div>
-                  ))}
-                </div>
-              </TabsContent>
-            </Tabs>
-
-            {/* Форма создания брони (вторая модалка внутри карточки) */}
-            <Dialog open={formOpen} onOpenChange={setFormOpen}>
-              <DialogContent className="max-w-xl rounded-2xl">
-                <DialogHeader>
-                  <DialogTitle>Создать бронь</DialogTitle>
-                </DialogHeader>
-
-                <div className="space-y-3">
-                  <div className="space-y-1">
-                    <Label>Дата начала</Label>
-                    <Input type="date" value={start} onChange={(e) => setStart(e.target.value)} />
-                  </div>
-                  <div className="space-y-1">
-                    <Label>Дата окончания</Label>
-                    <Input type="date" value={end} onChange={(e) => setEnd(e.target.value)} />
-                  </div>
-                  <div className="space-y-1">
-                    <Label>Клиент / ответственный</Label>
-                    <Input value={customer} onChange={(e) => setCustomer(e.target.value)} />
-                  </div>
-                  <div className="space-y-1">
-                    <Label>Комментарий (опционально)</Label>
-                    <Input value={comment} onChange={(e) => setComment(e.target.value)} />
-                  </div>
-
-                  {error && <div className="text-sm text-red-500">{error}</div>}
-
-                  <div className="flex items-center justify-end gap-2 pt-2">
-                    <Button
-                      variant="outline"
-                      className="rounded-xl"
-                      onClick={() => {
-                        resetForm();
-                        setFormOpen(false);
-                      }}
-                    >
-                      Отмена
-                    </Button>
-                    <Button
-                      className="rounded-xl"
-                      disabled={!start || !end}
-                      onClick={createReservation}
-                    >
-                      Сохранить
-                    </Button>
-                  </div>
-                </div>
-              </DialogContent>
-            </Dialog>
-          </>
-        )}
-      </DialogContent>
-    </Dialog>
+            <div className="grid gap-2">
+              <Label>Начало</Label>
+              <Input type="date" value={start} onChange={(e) => setStart(e.target.value)} />
+              <Label>Окончание</Label>
+              <Input type="date" value={end} onChange={(e) => setEnd(e.target.value)} />
+              <Label>Клиент</Label>
+              <Input value={customer} onChange={(e) => setCustomer(e.target.value)} />
+              <Label>Комментарий</Label>
+              <Input value={comment} onChange={(e) => setComment(e.target.value)} />
+              <Button onClick={add}>Создать бронь</Button>
+            </div>
+          </TabsContent>
+        </Tabs>
+      </CardContent>
+    </Card>
   );
 }

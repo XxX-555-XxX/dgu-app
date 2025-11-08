@@ -3,10 +3,12 @@
 Минимальный проект Vite + React + TypeScript + Tailwind.
 
 ## Быстрый старт
+
 ```bash
 npm i
 npm run dev
 ```
+
 > UI-компоненты `@/components/ui/*` используются из shadcn/ui. Их нужно добавить:
 
 ```bash
@@ -16,6 +18,7 @@ npx shadcn@latest add button card tabs input table dialog select popover command
 ```
 
 ## Структура
+
 ```
 src/
   App.tsx
@@ -29,7 +32,15 @@ src/
   components/
     FormsSection.tsx
 ```
+
 Алиас `@` настроен в `vite.config.ts` и `tsconfig.json`.
 Tailwind включён в `tailwind.config.js` и `postcss.config.js`.
 CSV-экспорт есть на вкладках «Активы» и «Сервис/ТО».
 Самотесты пишут результат в консоль браузера.
+
+echo.>>README.md
+echo ## 📚 Документация>>README.md
+echo.>>README.md
+echo - [PROJECT_SETUP.md](./PROJECT_SETUP.md)>>README.md
+echo - [CONTRIBUTING.md](./CONTRIBUTING.md)>>README.md
+echo - [ESLint TODO Report](./docs/ESLint_TODO_Report.md)>>README.md
