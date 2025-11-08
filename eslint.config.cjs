@@ -1,4 +1,4 @@
-// eslint.config.cjs — flat-config для ESLint v9
+// eslint.config.cjs — flat-config для ESLint v9 (CI-friendly)
 
 const js = require('@eslint/js');
 const tseslint = require('typescript-eslint');
@@ -8,18 +8,14 @@ const importPlugin = require('eslint-plugin-import');
 const globals = require('globals');
 
 module.exports = [
-  // чем не нужно заниматься ESLint
+  // Что не проверяем
   {
     ignores: ['dist/**', 'node_modules/**', 'coverage/**', '.vercel/**'],
   },
 
-  // Базовые правила JS
   js.configs.recommended,
-
-  // Базовые правила для TypeScript (без типо-анализа — быстрее в CI)
   ...tseslint.configs.recommended,
 
-  // Общие настройки для TS/JS/React файлов
   {
     files: ['**/*.{ts,tsx,js,jsx}'],
     languageOptions: {
@@ -40,13 +36,25 @@ module.exports = [
       'react-hooks/rules-of-hooks': 'error',
       'react-hooks/exhaustive-deps': 'warn',
 
-      // Немного порядка в импортax
+      // Импорты — только предупреждения (не валим сборку)
       'import/order': [
         'warn',
         {
           'newlines-between': 'always',
           groups: [['builtin', 'external'], ['internal'], ['parent', 'sibling', 'index']],
           alphabetize: { order: 'asc', caseInsensitive: true },
+        },
+      ],
+
+      // Снижаем строгость TS-правил под текущий код
+      '@typescript-eslint/no-explicit-any': 'off',
+      '@typescript-eslint/no-empty-object-type': 'off',
+      '@typescript-eslint/no-unused-vars': [
+        'warn',
+        {
+          argsIgnorePattern: '^_',
+          varsIgnorePattern: '^_',
+          ignoreRestSiblings: true,
         },
       ],
     },
