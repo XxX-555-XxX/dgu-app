@@ -1,46 +1,54 @@
-// Обёртки над reservations для строк таблицы
+import { listReservations, Reservation } from "@/lib/reservations";
 
-import {
-  isReservedNow,
-  nextReservation,
-  hasFutureWithin,
-} from "@/lib/reservations";
-
-/** Свободен ли актив с точки зрения броней прямо сейчас */
-export function isFree(assetCode: string): boolean {
-  return !isReservedNow(assetCode);
+// утилита форматирования
+function toHuman(iso?: string): string {
+  if (!iso) return "—";
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return "—";
+  return d.toLocaleDateString("ru-RU");
 }
 
-/** Есть ли текущая или будущая бронь */
-export function hasCurrentOrFutureReservation(assetCode: string): boolean {
-  const nr = nextReservation(assetCode);
-  return !!nr;
+export function nextReservation(assetId: string): Reservation | undefined {
+  const now = new Date().toISOString();
+  return listReservations()
+    .filter((r) => r.assetId === assetId && r.startDate && r.startDate >= now)
+    .sort((a, b) => (a.startDate! < b.startDate! ? -1 : 1))[0];
 }
 
-/** Есть ли будущая бронь в пределах N дней */
-export function hasFutureReservationWithin(assetCode: string, days: number): boolean {
-  return hasFutureWithin(assetCode, days);
+export function isReservedNow(assetId: string, atISO = new Date().toISOString()): boolean {
+  const at = atISO;
+  return listReservations().some((r) => {
+    const s = r.startDate ?? "";
+    const e = r.endDate ?? "";
+    return !!s && !!e && s <= at && at <= e;
+  });
 }
 
-/** Ближайшая бронь */
-export function getNextReservation(assetCode: string) {
-  return nextReservation(assetCode);
+export function hasFutureWithin(assetId: string, days: number): boolean {
+  const thr = new Date();
+  thr.setDate(thr.getDate() + Math.max(0, Math.floor(days)));
+  const thrISO = thr.toISOString();
+  return listReservations().some((r) => {
+    const s = r.startDate ?? "";
+    return !!s && s <= thrISO && r.assetId === assetId;
+  });
 }
 
-/** Текст в колонке «Доступность» + muted, если текст второстепенный */
-export function availabilityLabel(assetCode: string): { text: string; muted?: boolean } {
-  const nr = nextReservation(assetCode);
-  const today = new Date().toISOString().slice(0, 10);
-
-  const toHuman = (iso: string) => iso.split("-").reverse().join(".");
-
-  if (!nr) return { text: "Свободен" };
-
-  if (nr.startDate <= today && today <= nr.endDate) {
-    return { text: `Забронирован до: ${toHuman(nr.endDate)} (${nr.customer})` };
+// Небольшая подсказка-дисплей
+export function availabilityLabel(assetId: string): { text: string } {
+  const nowISO = new Date().toISOString();
+  const nr = nextReservation(assetId);
+  if (isReservedNow(assetId, nowISO)) {
+    // найдём текущую бронь
+    const cur = listReservations().find((r) => {
+      const s = r.startDate ?? "";
+      const e = r.endDate ?? "";
+      return r.assetId === assetId && !!s && !!e && s <= nowISO && nowISO <= e;
+    });
+    if (cur) return { text: `Забронирован до: ${toHuman(cur.endDate)} (${cur.customer ?? ""})` };
+    return { text: "Забронирован" };
   }
-  return {
-    text: `Доступен до начала брони: ${toHuman(nr.startDate)} (${nr.customer})`,
-    muted: true,
-  };
+  if (nr)
+    return { text: `Доступен до начала брони: ${toHuman(nr.startDate)} (${nr.customer ?? ""})` };
+  return { text: "Свободен" };
 }

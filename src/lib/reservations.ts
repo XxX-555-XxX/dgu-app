@@ -1,98 +1,113 @@
-// Простое хранилище броней + события для подписки
-
+// Простое локальное хранилище бронирований + вспомогательные утилиты
+// Формат брони
 export type Reservation = {
   id: string;
-  assetCode: string;
+  assetId: string;
+  startDate?: string; // ISO (может не быть у старых записей)
+  endDate?: string; // ISO
+  start?: string; // устаревшие поля (для совместимости со старым кодом)
+  end?: string;
   customer: string;
   comment?: string;
-  startDate: string; // YYYY-MM-DD
-  endDate: string;   // YYYY-MM-DD включительно
 };
 
-const STORAGE_KEY = "dgu.reservations.v1";
+// Ввод для создания брони
+export type ReservationInput = Omit<Reservation, "id" | "start" | "end">;
 
-function readAll(): Reservation[] {
+const STORAGE_KEY = "reservations:v1";
+const LS = typeof window !== "undefined" ? window.localStorage : undefined;
+
+// --- utils -----------------------------------------------------------------
+
+export function toISO(d: Date | string): string {
+  return typeof d === "string" ? d : new Date(d).toISOString();
+}
+
+function read(): Reservation[] {
+  if (!LS) return [];
   try {
-    const raw = localStorage.getItem(STORAGE_KEY);
+    const raw = LS.getItem(STORAGE_KEY);
     if (!raw) return [];
-    const arr = JSON.parse(raw);
-    return Array.isArray(arr) ? (arr as Reservation[]) : [];
+    const parsed = JSON.parse(raw) as Reservation[];
+    // миграция старых полей start/end → startDate/endDate
+    parsed.forEach((r) => {
+      if (!r.startDate && r.start) r.startDate = r.start;
+      if (!r.endDate && r.end) r.endDate = r.end;
+    });
+    return parsed;
   } catch {
     return [];
   }
 }
 
-function writeAll(list: Reservation[]) {
-  localStorage.setItem(STORAGE_KEY, JSON.stringify(list));
+function write(items: Reservation[]) {
+  if (!LS) return;
+  LS.setItem(STORAGE_KEY, JSON.stringify(items));
+  // уведомим слушателей (если есть окно)
+  if (typeof window !== "undefined") {
+    window.dispatchEvent(new CustomEvent("reservations:changed"));
+  }
 }
 
-function fmt(d: string) {
-  // валидация
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(d)) throw new Error("Bad date format, expected YYYY-MM-DD");
-}
-
-function overlaps(aStart: string, aEnd: string, bStart: string, bEnd: string) {
-  return aStart <= bEnd && bStart <= aEnd;
-}
-
-// ---------- публичное API
-
-export function listReservationsForAsset(assetCode: string): Reservation[] {
-  return readAll()
-    .filter((r) => r.assetCode === assetCode)
-    .sort((a, b) => a.startDate.localeCompare(b.startDate));
-}
+// --- CRUD ------------------------------------------------------------------
 
 export function listReservations(): Reservation[] {
-  return readAll().sort((a, b) => a.startDate.localeCompare(b.startDate));
+  // сортируем по дате начала (если есть)
+  return read().sort((a, b) => toISO(a.startDate ?? "").localeCompare(toISO(b.startDate ?? "")));
 }
 
-export function addReservation(input: Omit<Reservation, "id">): Reservation {
-  fmt(input.startDate);
-  fmt(input.endDate);
-  if (input.startDate > input.endDate) {
-    throw new Error("Дата начала позже даты окончания");
-  }
-
-  const all = readAll();
-  // запрет пересечений по одному активу
-  const sameAsset = all.filter((r) => r.assetCode === input.assetCode);
-  const conflict = sameAsset.find((r) => overlaps(r.startDate, r.endDate, input.startDate, input.endDate));
-  if (conflict) {
-    throw new Error("Даты пересекаются с существующей бронью");
-  }
-
-  const created: Reservation = { ...input, id: crypto.randomUUID() };
-  all.push(created);
-  writeAll(all);
-
-  // событие на весь проект — чтобы обновлялись таблицы/карточки
-  window.dispatchEvent(new CustomEvent("reservations:updated"));
-  return created;
+export function addReservation(input: ReservationInput): Reservation {
+  const items = read();
+  const id = typeof crypto !== "undefined" ? crypto.randomUUID() : `${Date.now()}-${Math.random()}`;
+  const record: Reservation = {
+    id,
+    assetId: input.assetId,
+    startDate: input.startDate ? toISO(input.startDate) : undefined,
+    endDate: input.endDate ? toISO(input.endDate) : undefined,
+    customer: input.customer,
+    comment: input.comment?.trim() || undefined,
+  };
+  items.push(record);
+  write(items);
+  return record;
 }
 
-export function removeReservation(id: string): void {
-  const all = readAll();
-  const next = all.filter((r) => r.id !== id);
-  writeAll(next);
-  window.dispatchEvent(new CustomEvent("reservations:updated"));
+export function removeReservation(id: string) {
+  const items = read().filter((r) => r.id !== id);
+  write(items);
 }
 
-export function nextReservation(assetCode: string): Reservation | null {
-  const today = new Date().toISOString().slice(0, 10);
-  const list = listReservationsForAsset(assetCode);
-  return list.find((r) => r.endDate >= today) || null;
+// --- настройки бронирований ------------------------------------------------
+
+// буфер дней до начала брони (для подсказок/предупреждений)
+const BUFFER_KEY = "reservations:bufferDays";
+let bufferDaysCache: number | null = null;
+
+export function getReservationBufferDays(): number {
+  if (bufferDaysCache != null) return bufferDaysCache;
+  if (!LS) return 0;
+  const raw = LS.getItem(BUFFER_KEY);
+  const n = raw ? Number(raw) : 0;
+  bufferDaysCache = Number.isFinite(n) ? n : 0;
+  return bufferDaysCache;
 }
 
-export function isReservedNow(assetCode: string): boolean {
-  const today = new Date().toISOString().slice(0, 10);
-  return listReservationsForAsset(assetCode).some((r) => r.startDate <= today && today <= r.endDate);
+export function setReservationBufferDays(n: number) {
+  bufferDaysCache = Math.max(0, Math.floor(n));
+  if (LS) LS.setItem(BUFFER_KEY, String(bufferDaysCache));
 }
 
-export function hasFutureWithin(assetCode: string, days: number): boolean {
-  const today = new Date();
-  const limit = new Date(today);
-  limit.setDate(limit.getDate() + days);
-  const lim = limit.toISOString().slice(0, 10);
-  return listReservationsForAsset(assetCode).some((r) => r.startDate > today.toISOString().slice(0, 10) && r.startDate <= lim);
+// --- подписка (для совместимости со старым кодом) --------------------------
+
+type Unsub = () => void;
+
+/**
+ * Примитивная подписка на изменения списка бронирований.
+ * Возвращает функцию отписки.
+ */
+export function subscribe(cb: () => void): Unsub {
+  if (typeof window === "undefined") return () => {};
+  const handler = () => cb();
+  window.addEventListener("reservations:changed", handler);
+  return () => window.removeEventListener("reservations:changed", handler);
 }
